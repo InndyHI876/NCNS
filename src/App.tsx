@@ -150,11 +150,26 @@ function App() {
     roads: null
   });
 
+  // 添加数据加载状态管理
+  const [dataLoadingStates, setDataLoadingStates] = useState({
+    urbanization: false,
+    roads: false
+  });
+  const [showLayers, setShowLayers] = useState({
+    urbanization: true,
+    roads: true
+  });
+  const [loadingTimeout, setLoadingTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
+
+  // 添加测试状态
+  const [appLoaded, setAppLoaded] = useState(false);
+
   // 使用TileJSON数据源，不需要手动加载GeoJSON文件
   useEffect(() => {
     // 模拟加载完成，因为TileJSON会自动加载
     setIsLoading(false);
     setLoadingProgress({ current: 8, total: 8 });
+    setAppLoaded(true);
   }, []);
 
   // 计算相交特征
@@ -558,6 +573,46 @@ function App() {
 
   return (
     <div style={{ display: 'flex', height: '100vh' }}>
+      {/* 调试信息显示 */}
+      <div style={{
+        position: 'fixed',
+        top: '10px',
+        left: '10px',
+        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+        color: 'white',
+        padding: '10px',
+        borderRadius: '6px',
+        fontSize: '12px',
+        zIndex: 9999,
+        fontFamily: 'monospace'
+      }}>
+        <div>应用状态: {appLoaded ? '已加载' : '加载中'}</div>
+        <div>加载状态: {isLoading ? '加载中' : '已完成'}</div>
+        <div>地图移动: {isMapMoving ? '是' : '否'}</div>
+        <div>图层显示: {showLayers.urbanization ? '是' : '否'}</div>
+      </div>
+      
+      {/* 测试显示 - 确保应用正常加载 */}
+      {!appLoaded && (
+        <div style={{
+          position: 'fixed',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          backgroundColor: 'rgba(0, 0, 0, 0.9)',
+          color: 'white',
+          padding: '20px',
+          borderRadius: '8px',
+          zIndex: 9999,
+          textAlign: 'center'
+        }}>
+          <div>应用加载中...</div>
+          <div style={{ marginTop: '10px', fontSize: '12px' }}>
+            如果长时间显示此消息，请检查控制台错误
+          </div>
+        </div>
+      )}
+      
       {/* 3D地球视图 */}
       <div style={{ width: '100%', height: '100%', position: 'relative' }}>
         {/* 统一控制面板 */}
