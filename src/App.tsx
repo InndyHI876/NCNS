@@ -132,6 +132,23 @@ function App() {
   const [isUpdating, setIsUpdating] = useState(false);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastFilteredFeaturesRef = useRef<GeoJSON.Feature[]>([]);
+  
+  // 添加图层控制状态
+  const [layerVisibility, setLayerVisibility] = useState({
+    urbanization: true,  // urbanization图层默认显示
+    roads: true         // 道路图层默认显示
+  });
+
+  // 添加下载功能状态
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [selectedAreaData, setSelectedAreaData] = useState<{
+    urbanization: GeoJSON.FeatureCollection | null;
+    roads: GeoJSON.FeatureCollection | null;
+  }>({
+    urbanization: null,
+    roads: null
+  });
 
   // 使用TileJSON数据源，不需要手动加载GeoJSON文件
   useEffect(() => {
@@ -271,6 +288,9 @@ function App() {
     calculateIntersections(newSelectionBox);
     updateDetailMaps(newSelectionBox);
     
+    // 自动裁剪选择区域的数据
+    clipData(newSelectionBox);
+    
     setStartPoint(null);
     setEndPoint(null);
   };
@@ -286,6 +306,12 @@ function App() {
       setEndPoint(null);
       setSelectionBox(null);
       setIsDragging(false);
+    } else {
+      // 取消选择时清除已裁剪的数据
+      setSelectedAreaData({
+        urbanization: null,
+        roads: null
+      });
     }
   };
 
@@ -303,7 +329,7 @@ function App() {
     overviewMapRef.current.flyTo({
       center: hongKongCoordinates,
       zoom: 13.5,
-      duration: 20000, // 20秒的动画时间
+      duration: 40000, // 40秒的动画时间（调慢一倍）
       essential: true
     });
   };
@@ -322,7 +348,7 @@ function App() {
     overviewMapRef.current.flyTo({
       center: londonCoordinates,
       zoom: 13.5,
-      duration: 20000, // 20秒的动画时间
+      duration: 40000, // 40秒的动画时间（调慢一倍）
       essential: true
     });
   };
@@ -369,6 +395,140 @@ function App() {
     }
   };
 
+  // 图层切换函数
+  const toggleLayer = (layerName: 'urbanization' | 'roads') => {
+    setLayerVisibility(prev => ({
+      ...prev,
+      [layerName]: !prev[layerName]
+    }));
+  };
+
+  // 裁剪数据函数
+  const clipData = async (bounds: [number, number, number, number]) => {
+    if (!overviewMapRef.current) return;
+
+    const [minLng, minLat, maxLng, maxLat] = bounds;
+    const boxPolygon = turf.bboxPolygon([minLng, minLat, maxLng, maxLat]);
+    
+    setIsDownloading(true);
+    setDownloadProgress(0);
+
+    try {
+      // 裁剪urbanization数据
+      const urbanizationFeatures: GeoJSON.Feature[] = [];
+      if (layerVisibility.urbanization) {
+        for (let i = 0; i < 8; i++) {
+          const layerId = `nc-level-${i}`;
+          try {
+            const features = overviewMapRef.current.queryRenderedFeatures(
+              [[minLng, minLat], [maxLng, maxLat]],
+              { layers: [layerId] }
+            );
+            
+            features.forEach(feature => {
+              try {
+                if (turf.booleanIntersects(feature as GeoJSON.Feature, boxPolygon)) {
+                  urbanizationFeatures.push(feature as GeoJSON.Feature);
+                }
+              } catch (error) {
+                console.error('Error checking intersection for urbanization feature:', error);
+              }
+            });
+          } catch (error) {
+            console.error(`Error querying urbanization layer ${layerId}:`, error);
+          }
+        }
+        setDownloadProgress(50);
+      }
+
+      // 裁剪道路数据
+      const roadFeatures: GeoJSON.Feature[] = [];
+      if (layerVisibility.roads) {
+        try {
+          const features = overviewMapRef.current.queryRenderedFeatures(
+            [[minLng, minLat], [maxLng, maxLat]],
+            { layers: ['roads-layer'] }
+          );
+          
+          features.forEach(feature => {
+            try {
+              if (turf.booleanIntersects(feature as GeoJSON.Feature, boxPolygon)) {
+                roadFeatures.push(feature as GeoJSON.Feature);
+              }
+            } catch (error) {
+              console.error('Error checking intersection for road feature:', error);
+            }
+          });
+        } catch (error) {
+          console.error('Error querying roads layer:', error);
+        }
+        setDownloadProgress(100);
+      }
+
+      // 保存裁剪后的数据
+      setSelectedAreaData({
+        urbanization: urbanizationFeatures.length > 0 ? {
+          type: 'FeatureCollection',
+          features: urbanizationFeatures
+        } : null,
+        roads: roadFeatures.length > 0 ? {
+          type: 'FeatureCollection',
+          features: roadFeatures
+        } : null
+      });
+
+      console.log(`裁剪完成: urbanization ${urbanizationFeatures.length} 个特征, roads ${roadFeatures.length} 个特征`);
+      
+    } catch (error) {
+      console.error('裁剪数据时出错:', error);
+    } finally {
+      setIsDownloading(false);
+      setDownloadProgress(0);
+    }
+  };
+
+  // 下载数据函数
+  const downloadData = () => {
+    if (!selectedAreaData.urbanization && !selectedAreaData.roads) {
+      alert('没有可下载的数据，请先选择区域');
+      return;
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    
+    // 下载urbanization数据
+    if (selectedAreaData.urbanization) {
+      const urbanizationBlob = new Blob([JSON.stringify(selectedAreaData.urbanization, null, 2)], {
+        type: 'application/json'
+      });
+      const urbanizationUrl = URL.createObjectURL(urbanizationBlob);
+      const urbanizationLink = document.createElement('a');
+      urbanizationLink.href = urbanizationUrl;
+      urbanizationLink.download = `urbanization_data_${timestamp}.json`;
+      document.body.appendChild(urbanizationLink);
+      urbanizationLink.click();
+      document.body.removeChild(urbanizationLink);
+      URL.revokeObjectURL(urbanizationUrl);
+    }
+
+    // 下载道路数据
+    if (selectedAreaData.roads) {
+      const roadsBlob = new Blob([JSON.stringify(selectedAreaData.roads, null, 2)], {
+        type: 'application/json'
+      });
+      const roadsUrl = URL.createObjectURL(roadsBlob);
+      const roadsLink = document.createElement('a');
+      roadsLink.href = roadsUrl;
+      roadsLink.download = `roads_data_${timestamp}.json`;
+      document.body.appendChild(roadsLink);
+      roadsLink.click();
+      document.body.removeChild(roadsLink);
+      URL.revokeObjectURL(roadsUrl);
+    }
+
+    alert('数据下载完成！');
+  };
+
   // 修改过滤道路数据的useEffect
   useEffect(() => {
     if (currentBounds && roadFeatures.length > 0 && !isMapMoving) {
@@ -400,24 +560,286 @@ function App() {
     <div style={{ display: 'flex', height: '100vh' }}>
       {/* 3D地球视图 */}
       <div style={{ width: '100%', height: '100%', position: 'relative' }}>
-        <button 
-          onClick={toggleSelectionMode}
-          style={{
-            position: 'absolute',
-            top: '10px',
-            left: '10px',
-            zIndex: 1,
-            padding: '8px 16px',
-            backgroundColor: isLoading ? '#cccccc' : (isSelecting ? '#4CAF50' : '#f44336'),
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: isLoading ? 'not-allowed' : 'pointer'
-          }}
-          disabled={isLoading}
-        >
-          {isLoading ? '数据加载中...' : (isSelecting ? '取消选择' : '开始选择')}
-        </button>
+        {/* 统一控制面板 */}
+        <div style={{
+          position: 'absolute',
+          top: '10px',
+          left: '10px',
+          zIndex: 1,
+          backgroundColor: 'rgba(0, 0, 0, 0.85)',
+          color: 'white',
+          padding: '12px',
+          borderRadius: '10px',
+          minWidth: '220px',
+          fontFamily: 'Arial, sans-serif',
+          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+          backdropFilter: 'blur(10px)'
+        }}>
+          
+          {/* 选择功能区域 */}
+          <div style={{
+            marginBottom: '12px',
+            padding: '10px',
+            backgroundColor: 'rgba(255, 255, 255, 0.05)',
+            borderRadius: '6px',
+            border: '1px solid rgba(255, 255, 255, 0.1)'
+          }}>
+            <div style={{
+              fontSize: '12px',
+              fontWeight: 'bold',
+              marginBottom: '6px',
+              color: '#4CAF50'
+            }}>
+              区域选择
+            </div>
+            <button 
+              onClick={toggleSelectionMode}
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                backgroundColor: isLoading ? '#666' : (isSelecting ? '#4CAF50' : '#f44336'),
+                color: 'white',
+                border: 'none',
+                borderRadius: '5px',
+                cursor: isLoading ? 'not-allowed' : 'pointer',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                transition: 'all 0.3s ease'
+              }}
+              disabled={isLoading}
+              onMouseEnter={(e) => {
+                if (!isLoading) {
+                  e.currentTarget.style.transform = 'translateY(-1px)';
+                  e.currentTarget.style.boxShadow = '0 4px 8px rgba(0, 0, 0, 0.3)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!isLoading) {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = 'none';
+                }
+              }}
+            >
+              {isLoading ? '数据加载中...' : (isSelecting ? '✓ 取消选择' : '📍 开始选择')}
+            </button>
+          </div>
+          
+          {/* 图层控制区域 */}
+          <div style={{
+            marginBottom: '12px',
+            padding: '10px',
+            backgroundColor: 'rgba(255, 255, 255, 0.05)',
+            borderRadius: '6px',
+            border: '1px solid rgba(255, 255, 255, 0.1)'
+          }}>
+            <div style={{
+              fontSize: '12px',
+              fontWeight: 'bold',
+              marginBottom: '8px',
+              color: '#2196F3'
+            }}>
+              图层控制
+            </div>
+            
+            {/* Urbanization图层控制 */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: '8px',
+              padding: '5px 6px',
+              backgroundColor: 'rgba(255, 255, 255, 0.03)',
+              borderRadius: '4px'
+            }}>
+              <label style={{
+                display: 'flex',
+                alignItems: 'center',
+                cursor: 'pointer',
+                fontSize: '11px',
+                flex: 1
+              }}>
+                <input
+                  type="checkbox"
+                  checked={layerVisibility.urbanization}
+                  onChange={() => toggleLayer('urbanization')}
+                  style={{
+                    marginRight: '8px',
+                    transform: 'scale(1.2)',
+                    accentColor: '#4CAF50'
+                  }}
+                />
+                <span style={{ 
+                  color: layerVisibility.urbanization ? '#4CAF50' : '#ccc',
+                  fontWeight: layerVisibility.urbanization ? 'bold' : 'normal'
+                }}>
+                  自然城市
+                </span>
+              </label>
+              <div style={{
+                width: '12px',
+                height: '12px',
+                backgroundColor: layerVisibility.urbanization ? '#4CAF50' : '#666',
+                borderRadius: '2px',
+                marginLeft: '6px',
+                boxShadow: layerVisibility.urbanization ? '0 0 4px rgba(76, 175, 80, 0.5)' : 'none'
+              }} />
+            </div>
+            
+            {/* 道路图层控制 */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '5px 6px',
+              backgroundColor: 'rgba(255, 255, 255, 0.03)',
+              borderRadius: '4px'
+            }}>
+              <label style={{
+                display: 'flex',
+                alignItems: 'center',
+                cursor: 'pointer',
+                fontSize: '11px',
+                flex: 1
+              }}>
+                <input
+                  type="checkbox"
+                  checked={layerVisibility.roads}
+                  onChange={() => toggleLayer('roads')}
+                  style={{
+                    marginRight: '8px',
+                    transform: 'scale(1.2)',
+                    accentColor: '#2196F3'
+                  }}
+                />
+                <span style={{ 
+                  color: layerVisibility.roads ? '#2196F3' : '#ccc',
+                  fontWeight: layerVisibility.roads ? 'bold' : 'normal'
+                }}>
+                  自然道路
+                </span>
+              </label>
+              <div style={{
+                width: '12px',
+                height: '12px',
+                backgroundColor: layerVisibility.roads ? '#2196F3' : '#666',
+                borderRadius: '2px',
+                marginLeft: '6px',
+                boxShadow: layerVisibility.roads ? '0 0 4px rgba(33, 150, 243, 0.5)' : 'none'
+              }} />
+            </div>
+          </div>
+          
+          {/* 数据下载区域 */}
+          <div style={{
+            padding: '10px',
+            backgroundColor: 'rgba(255, 255, 255, 0.05)',
+            borderRadius: '6px',
+            border: '1px solid rgba(255, 255, 255, 0.1)'
+          }}>
+            <div style={{
+              fontSize: '12px',
+              fontWeight: 'bold',
+              marginBottom: '8px',
+              color: '#FF9800'
+            }}>
+              数据下载（正在测试）
+            </div>
+            
+            {/* 下载按钮 */}
+            <button
+              onClick={downloadData}
+              disabled={isDownloading || (!selectedAreaData.urbanization && !selectedAreaData.roads)}
+              style={{
+                width: '100%',
+                padding: '8px 10px',
+                backgroundColor: isDownloading || (!selectedAreaData.urbanization && !selectedAreaData.roads) 
+                  ? '#666' 
+                  : '#FF9800',
+                color: 'white',
+                border: 'none',
+                borderRadius: '5px',
+                cursor: isDownloading || (!selectedAreaData.urbanization && !selectedAreaData.roads) 
+                  ? 'not-allowed' 
+                  : 'pointer',
+                fontSize: '11px',
+                fontWeight: 'bold',
+                marginBottom: '8px',
+                transition: 'all 0.3s ease'
+              }}
+              onMouseEnter={(e) => {
+                if (!isDownloading && (selectedAreaData.urbanization || selectedAreaData.roads)) {
+                  e.currentTarget.style.transform = 'translateY(-1px)';
+                  e.currentTarget.style.boxShadow = '0 4px 8px rgba(0, 0, 0, 0.3)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!isDownloading && (selectedAreaData.urbanization || selectedAreaData.roads)) {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = 'none';
+                }
+              }}
+            >
+              {isDownloading ? '⏳ 处理中...' : '📥 下载选中区域数据'}
+            </button>
+            
+            {/* 下载进度条 */}
+            {isDownloading && (
+              <div style={{ marginBottom: '8px' }}>
+                <div style={{
+                  fontSize: '10px',
+                  marginBottom: '4px',
+                  color: '#ccc',
+                  textAlign: 'center'
+                }}>
+                  裁剪进度: {downloadProgress}%
+                </div>
+                <div style={{
+                  width: '100%',
+                  height: '6px',
+                  backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                  borderRadius: '3px',
+                  overflow: 'hidden'
+                }}>
+                  <div style={{
+                    width: `${downloadProgress}%`,
+                    height: '100%',
+                    backgroundColor: '#4CAF50',
+                    transition: 'width 0.3s ease-in-out',
+                    borderRadius: '3px'
+                  }} />
+                </div>
+              </div>
+            )}
+            
+            {/* 数据状态显示 */}
+            <div style={{ 
+              fontSize: '10px', 
+              color: '#ccc',
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: '3px'
+            }}>
+              <div style={{
+                padding: '3px 4px',
+                backgroundColor: selectedAreaData.urbanization ? 'rgba(76, 175, 80, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+                borderRadius: '3px',
+                textAlign: 'center',
+                border: selectedAreaData.urbanization ? '1px solid rgba(76, 175, 80, 0.3)' : '1px solid rgba(255, 255, 255, 0.1)'
+              }}>
+                自然城市: {selectedAreaData.urbanization ? '✓' : '✗'}
+              </div>
+              <div style={{
+                padding: '3px 4px',
+                backgroundColor: selectedAreaData.roads ? 'rgba(33, 150, 243, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+                borderRadius: '3px',
+                textAlign: 'center',
+                border: selectedAreaData.roads ? '1px solid rgba(33, 150, 243, 0.3)' : '1px solid rgba(255, 255, 255, 0.1)'
+              }}>
+                自然道路: {selectedAreaData.roads ? '✓' : '✗'}
+              </div>
+            </div>
+          </div>
+        </div>
         <button 
           onClick={flyToLondon}
           style={{
@@ -515,70 +937,74 @@ function App() {
             }}
           />
           {/* 使用TileJSON加载urbanization数据 */}
-          <Source
-            id="urbanization-source"
-            type="vector"
-            url="https://livablecitylab.hkust-gz.edu.cn/data/globalNS.json"
-          >
-            {/* 添加图层 */}
-            {layerStyles.map((style) => (
-              <Layer
-                key={style.id}
-                id={style.id}
-                type={style.type}
-                source-layer={style['source-layer']}
-                paint={style.paint}
-              />
-            ))}
-          </Source>
+          {layerVisibility.urbanization && (
+            <Source
+              id="urbanization-source"
+              type="vector"
+              url="https://livablecitylab.hkust-gz.edu.cn/data/globalNS.json"
+            >
+              {/* 添加图层 */}
+              {layerStyles.map((style) => (
+                <Layer
+                  key={style.id}
+                  id={style.id}
+                  type={style.type}
+                  source-layer={style['source-layer']}
+                  paint={style.paint}
+                />
+              ))}
+            </Source>
+          )}
           
           {/* 使用TileJSON加载道路数据 */}
-          <Source
-            id="roads-source"
-            type="vector"
-            url="https://livablecitylab.hkust-gz.edu.cn/data/global_transportation.json"
-          >
-            <Layer
-              id="roads-layer"
-              type="line"
-              source-layer="transportation"
-              minzoom={3}
-              maxzoom={14}
-              paint={{
-                'line-color': [
-                  'case',
-                  ['==', ['get', 'level'], 4], '#ff0000',   // 红色 - level 4
-                  ['==', ['get', 'level'], 5], '#ff0000',   // 橙红色 - level 5
-                  ['==', ['get', 'level'], 6], '#ff8000',   // 橙色 - level 6
-                  ['==', ['get', 'level'], 7], '#ffbf00',   // 橙黄色 - level 7
-                  ['==', ['get', 'level'], 8], '#ffff00',   // 黄色 - level 8
-                  ['==', ['get', 'level'], 9], '#80ff00',   // 浅绿色 - level 9
-                  ['==', ['get', 'level'], 10], '#00ff00',  // 绿色 - level 10
-                  ['==', ['get', 'level'], 11], '#00ff80',  // 青绿色 - level 11
-                  ['==', ['get', 'level'], 12], '#00ffff',  // 天蓝色 - level 12
-                  ['==', ['get', 'level'], 13], '#00ffff',  // 天蓝色 - level 13
-                  ['==', ['get', 'level'], 14], '#0000ff',  // 深蓝色 - level 14
-                  '#0000ff'  // 默认蓝色 - 其他level值
-                ],
-                'line-width': [
-                  'case',
-                  ['==', ['get', 'level'], 4], 3,   // level 4 最粗
-                  ['==', ['get', 'level'], 5], 2.8,
-                  ['==', ['get', 'level'], 6], 2.6,
-                  ['==', ['get', 'level'], 7], 2.4,
-                  ['==', ['get', 'level'], 8], 2.2,
-                  ['==', ['get', 'level'], 9], 2,
-                  ['==', ['get', 'level'], 10], 1.8,
-                  ['==', ['get', 'level'], 11], 1.6,
-                  ['==', ['get', 'level'], 12], 1.4,
-                  ['==', ['get', 'level'], 13], 1.2,   // level 13 最细
-                  ['==', ['get', 'level'], 14], 1,
-                  1   // 默认宽度
-                ],
-                'line-opacity': 1.0
-              }}
-            />
-          </Source>
+          {layerVisibility.roads && (
+            <Source
+              id="roads-source"
+              type="vector"
+              url="https://livablecitylab.hkust-gz.edu.cn/data/global_transportation.json"
+            >
+              <Layer
+                id="roads-layer"
+                type="line"
+                source-layer="transportation"
+                minzoom={3}
+                maxzoom={14}
+                paint={{
+                  'line-color': [
+                    'case',
+                    ['==', ['get', 'level'], 4], '#ff0000',   // 红色 - level 4
+                    ['==', ['get', 'level'], 5], '#ff0000',   // 橙红色 - level 5
+                    ['==', ['get', 'level'], 6], '#ff8000',   // 橙色 - level 6
+                    ['==', ['get', 'level'], 7], '#ffbf00',   // 橙黄色 - level 7
+                    ['==', ['get', 'level'], 8], '#ffff00',   // 黄色 - level 8
+                    ['==', ['get', 'level'], 9], '#80ff00',   // 浅绿色 - level 9
+                    ['==', ['get', 'level'], 10], '#00ff00',  // 绿色 - level 10
+                    ['==', ['get', 'level'], 11], '#00ff80',  // 青绿色 - level 11
+                    ['==', ['get', 'level'], 12], '#00ffff',  // 天蓝色 - level 12
+                    ['==', ['get', 'level'], 13], '#00ffff',  // 天蓝色 - level 13
+                    ['==', ['get', 'level'], 14], '#0000ff',  // 深蓝色 - level 14
+                    '#0000ff'  // 默认蓝色 - 其他level值
+                  ],
+                  'line-width': [
+                    'case',
+                    ['==', ['get', 'level'], 4], 3,   // level 4 最粗
+                    ['==', ['get', 'level'], 5], 2.8,
+                    ['==', ['get', 'level'], 6], 2.6,
+                    ['==', ['get', 'level'], 7], 2.4,
+                    ['==', ['get', 'level'], 8], 2.2,
+                    ['==', ['get', 'level'], 9], 2,
+                    ['==', ['get', 'level'], 10], 1.8,
+                    ['==', ['get', 'level'], 11], 1.6,
+                    ['==', ['get', 'level'], 12], 1.4,
+                    ['==', ['get', 'level'], 13], 1.2,   // level 13 最细
+                    ['==', ['get', 'level'], 14], 1,
+                    1   // 默认宽度
+                  ],
+                  'line-opacity': 1.0
+                }}
+              />
+            </Source>
+          )}
           
           {/* 修改加载状态指示器 */}
           {(isMapMoving || isUpdating) && (
