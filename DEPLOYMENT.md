@@ -1,74 +1,78 @@
-# 部署指南
+# GitHub Pages 部署指南
 
-## 免费部署平台推荐
+## 问题说明
+您遇到的错误是因为GitHub Pages无法直接处理TypeScript文件（.tsx）。GitHub Pages需要的是编译后的静态文件。
 
-### 1. Vercel (推荐)
-**最适合您的 React + Vite 项目**
+## 解决方案
 
-#### 部署步骤：
-1. 访问 [vercel.com](https://vercel.com) 并注册账号
-2. 点击 "New Project"
-3. 连接您的 GitHub 仓库
-4. Vercel 会自动检测到这是一个 Vite 项目
-5. 点击 "Deploy" 即可
+### 方法1：使用GitHub Actions自动部署（推荐）
 
-#### 优势：
-- 自动 HTTPS
-- 全球 CDN
-- 自动部署（每次 push 到 GitHub 都会重新部署）
-- 每月 100GB 免费带宽
-- 专门为 React 应用优化
+1. **确保您的仓库设置正确**：
+   - 进入仓库的 Settings > Pages
+   - Source 选择 "GitHub Actions"
 
-### 2. Netlify
-**简单易用的替代方案**
+2. **推送代码到master分支**：
+   ```bash
+   git add .
+   git commit -m "Add GitHub Actions deployment"
+   git push origin master
+   ```
 
-#### 部署步骤：
-1. 访问 [netlify.com](https://netlify.com) 并注册
-2. 点击 "New site from Git"
-3. 连接 GitHub 仓库
-4. 设置构建命令：`npm run build`
-5. 设置发布目录：`dist`
-6. 点击 "Deploy site"
+3. **查看部署状态**：
+   - 进入仓库的 Actions 标签页
+   - 查看 "Deploy to GitHub Pages" 工作流是否成功运行
 
-### 3. GitHub Pages
-**完全免费的方案**
+### 方法2：手动部署
 
-#### 部署步骤：
-1. 在项目根目录创建 `.github/workflows/deploy.yml` 文件
-2. 推送代码到 GitHub
-3. 在仓库设置中启用 GitHub Pages
+1. **本地构建项目**：
+   ```bash
+   npm run build
+   ```
 
-## 本地测试部署
+2. **将构建文件推送到gh-pages分支**：
+   ```bash
+   # 安装gh-pages包
+   npm install --save-dev gh-pages
+   
+   # 添加部署脚本到package.json
+   # "deploy": "gh-pages -d dist"
+   
+   # 部署
+   npm run deploy
+   ```
 
-在部署之前，建议先在本地测试构建：
+## 配置说明
 
-```bash
-# 安装依赖
-npm install
+### vite.config.ts
+- `base: '/NCNS/'` - 确保与您的仓库名称匹配
+- 这个配置告诉Vite在构建时使用正确的base路径
 
-# 构建项目
-npm run build
+### GitHub Actions工作流
+- 自动在每次推送到master分支时构建和部署
+- 使用最新的Node.js和GitHub Actions版本
+- 包含适当的权限设置
 
-# 预览构建结果
-npm run preview
-```
+## 常见问题
 
-## 注意事项
+1. **页面仍然空白**：
+   - 检查浏览器控制台是否有404错误
+   - 确认base路径配置正确
+   - 检查GitHub Actions是否成功完成
 
-1. **数据文件**: 您的 GeoJSON 文件在 `public/data/` 目录下，这些文件会被自动包含在构建中
-2. **环境变量**: 如果使用了任何 API 密钥，请确保在部署平台中设置环境变量
-3. **CORS**: 如果您的应用需要访问外部 API，确保目标服务器允许跨域请求
+2. **资源加载失败**：
+   - 确保所有静态资源路径都是相对路径
+   - 检查CSS和JS文件是否正确加载
 
-## 推荐部署流程
+3. **部署后需要等待**：
+   - GitHub Pages部署可能需要几分钟时间
+   - 清除浏览器缓存后重试
 
-1. 首先将代码推送到 GitHub
-2. 使用 Vercel 进行部署（最简单）
-3. 获得一个类似 `https://your-project.vercel.app` 的链接
-4. 可以设置自定义域名（可选）
+## 验证部署
 
-## 故障排除
+部署成功后，您应该能够访问：
+`https://inndyhi876.github.io/NCNS/`
 
-如果部署失败，请检查：
-- `package.json` 中的构建脚本是否正确
-- 所有依赖是否都已安装
-- 构建日志中的错误信息 
+如果仍然有问题，请检查：
+1. GitHub Actions日志
+2. 浏览器开发者工具的网络和控制台标签
+3. 确认所有文件都正确上传到gh-pages分支 
